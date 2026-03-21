@@ -121,7 +121,7 @@ def parse_coc_time(ts: str) -> datetime:
 
 def time_left_str(sec: float) -> str:
     h, m = int(sec // 3600), int((sec % 3600) // 60)
-    return f"{h}s {m}d" if h else f"{m}d"
+    return f"{h}soat {m} daqiqa" if h else f"{m} daqiqa"
 
 def stars_bar(n: int) -> str:
     return "⭐" * n + "☆" * (3 - n)
@@ -349,7 +349,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        "⚔️ *CoC Klan Boti faol!*\n\n"
+        "⚔️ *Uzbek Tigers Boti faol!*\n\n"
         "Quyidagi tugmalardan foydalaning yoki buyruq yozing:",
         parse_mode="Markdown",
         reply_markup=reply_markup,
@@ -522,7 +522,7 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ],
         ]
         await query.edit_message_text(
-            "⚔️ *CoC Klan Boti faol!*\n\n"
+            "⚔️ *Uzbek Tigers Boti faol!*\n\n"
             "Quyidagi tugmalardan foydalaning yoki buyruq yozing:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
