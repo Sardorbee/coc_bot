@@ -1,19 +1,17 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║        Clash of Clans — Telegram Bot  (Render Edition)       ║
+║     Clash of Clans — Telegram Bot  (O'zbek tilida)          ║
 ║──────────────────────────────────────────────────────────────║
-║  Render requires:                                            ║
-║   • Webhook mode instead of polling                          ║
-║   • PORT env var respected (Render sets this automatically)  ║
-║   • PTB's built-in server handles both Telegram + health     ║
-║──────────────────────────────────────────────────────────────║
-║  Features:                                                   ║
-║   ⏰  War end reminder  (2 hr + 30 min warnings)             ║
-║   🏁  Auto-post war results when war ends                    ║
-║   🌟  Real-time 3-star alert with full description           ║
-║   👤  /player #TAG  — detailed player card                   ║
-║   ⚔️   /war          — live war snapshot                     ║
-║   📋  /warlog       — last 5 war results                     ║
+║  Buyruqlar:                                                  ║
+║   /urush      — joriy urush holati                           ║
+║   /urushlog   — oxirgi 5 ta urush natijasi                   ║
+║   /oyinchi    — o'yinchi ma'lumotlari                        ║
+║   /azolar     — klan a'zolari ro'yxati                       ║
+║  Avtomatik xabarlar:                                         ║
+║   ⏰  Urush tugashiga 2 soat qolganda ogohlantirish          ║
+║   🚨  Urush tugashiga 30 daqiqa qolganda ogohlantirish       ║
+║   🌟  3 yulduzli hujum bildirishnomasi                       ║
+║   🏁  Urush natijasi avtomatik e'lon                         ║
 ╚══════════════════════════════════════════════════════════════╝
 """
 
@@ -36,7 +34,7 @@ TELEGRAM_CHAT = os.environ["TELEGRAM_CHAT_ID"]
 PORT          = int(os.getenv("PORT", "10000"))
 POLL_INTERVAL = 60
 
-# ── HEALTH SERVER (required by Render to detect open port) ────────────────────
+# ── HEALTH SERVER ─────────────────────────────────────────────────────────────
 class _Health(BaseHTTPRequestHandler):
     def do_GET(self):
         import urllib.request
@@ -46,8 +44,7 @@ class _Health(BaseHTTPRequestHandler):
             ip = "unavailable"
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(f"CoC Bot running | Outbound IP: {ip}".encode())
-
+        self.wfile.write(f"CoC Bot ishlayapti | Chiqish IP: {ip}".encode())
     def log_message(self, *_):
         pass
 
@@ -59,10 +56,7 @@ threading.Thread(target=_start_health_server, daemon=True).start()
 COC_BASE = "https://api.clashofclans.com/v1"
 HEADERS  = {"Authorization": f"Bearer {COC_API_KEY}", "Accept": "application/json"}
 
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
 
 # ── WAR STATE ─────────────────────────────────────────────────────────────────
@@ -82,34 +76,39 @@ def _reset_war_state(end_time: str):
         "posted_result":   False,
         "three_star_seen": set(),
     })
-    log.info("War state reset (endTime=%s)", end_time)
+    log.info("Urush holati yangilandi (endTime=%s)", end_time)
 
 # ── COC API ───────────────────────────────────────────────────────────────────
 
 def encode_tag(tag: str) -> str:
     return tag.strip().upper().replace("#", "%23")
 
-
 async def coc_get(session: aiohttp.ClientSession, path: str):
     try:
         async with session.get(
-            f"{COC_BASE}{path}",
-            headers=HEADERS,
+            f"{COC_BASE}{path}", headers=HEADERS,
             timeout=aiohttp.ClientTimeout(total=10)
         ) as r:
             if r.status == 200:
                 return await r.json()
             log.warning("CoC API %s → HTTP %s", path, r.status)
     except Exception as exc:
-        log.error("CoC request failed %s: %s", path, exc)
+        log.error("CoC so'rov xatosi %s: %s", path, exc)
     return None
 
+async def get_current_war(s):
+    return await coc_get(s, f"/clans/{encode_tag(CLAN_TAG)}/currentwar")
 
-async def get_current_war(s): return await coc_get(s, f"/clans/{encode_tag(CLAN_TAG)}/currentwar")
 async def get_war_log(s):
     d = await coc_get(s, f"/clans/{encode_tag(CLAN_TAG)}/warlog?limit=5")
     return (d or {}).get("items", [])
-async def get_player(s, tag): return await coc_get(s, f"/players/{encode_tag(tag)}")
+
+async def get_player(s, tag):
+    return await coc_get(s, f"/players/{encode_tag(tag)}")
+
+async def get_clan_members(s):
+    d = await coc_get(s, f"/clans/{encode_tag(CLAN_TAG)}/members?limit=50")
+    return (d or {}).get("items", [])
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 
@@ -118,7 +117,7 @@ def parse_coc_time(ts: str) -> datetime:
 
 def time_left_str(sec: float) -> str:
     h, m = int(sec // 3600), int((sec % 3600) // 60)
-    return f"{h}h {m}m" if h else f"{m}m"
+    return f"{h}s {m}d" if h else f"{m}d"
 
 def stars_bar(n: int) -> str:
     return "⭐" * n + "☆" * (3 - n)
@@ -126,11 +125,23 @@ def stars_bar(n: int) -> str:
 def result_emoji(r: str) -> str:
     return {"WIN": "🏆", "LOSE": "💀", "TIE": "🤝"}.get((r or "").upper(), "🏁")
 
+def result_uz(r: str) -> str:
+    return {"WIN": "G'ALABA", "LOSE": "MAG'LUBIYAT", "TIE": "DURRANG"}.get((r or "").upper(), "NOMA'LUM")
+
+def role_uz(role: str) -> str:
+    return {
+        "LEADER":    "Rahbar",
+        "COLEADER":  "Yordamchi rahbar",
+        "ELDER":     "Katta a'zo",
+        "MEMBER":    "A'zo",
+        "NOT_MEMBER": "A'zo emas",
+    }.get(role.upper(), role)
+
 def find_defender_name(war: dict, tag: str) -> str:
     for m in war.get("opponent", {}).get("members", []):
         if m["tag"] == tag:
             return m["name"]
-    return "Unknown"
+    return "Noma'lum"
 
 def find_new_3stars(war: dict) -> list:
     hits = []
@@ -150,23 +161,23 @@ def find_new_3stars(war: dict) -> list:
 
 # ── MESSAGE TEMPLATES ─────────────────────────────────────────────────────────
 
-def msg_three_star(attacker, defender, destruction, duration, war_type="Clan War") -> str:
+def msg_three_star(attacker, defender, destruction, duration, war_type="Klan Urushi") -> str:
     mins, secs = divmod(duration, 60)
-    dur = f"{mins}m {secs}s" if mins else f"{secs}s"
+    dur = f"{mins}d {secs}s" if mins else f"{secs}s"
     hype = (
-        "💯 Perfect destruction — flawless victory!" if destruction == 100 else
-        "🔥 Near-perfect raid — incredible attack!"   if destruction >= 95  else
-        "👏 Outstanding attack! The clan is proud!"
+        "💯 Mukammal vayronagarchilik — beqiyos g'alaba!" if destruction == 100 else
+        "🔥 Deyarli mukammal hujum — ajoyib!"              if destruction >= 95  else
+        "👏 Zo'r hujum! Klan faxrlanadi!"
     )
     return (
         f"╔══════════════════════╗\n"
-        f"🌟 *TRIPLE STAR!* 🌟\n"
+        f"🌟 *3 YULDUZ!* 🌟\n"
         f"╚══════════════════════╝\n\n"
-        f"⚔️  *War Type:* {war_type}\n\n"
-        f"🗡  *Attacker:* {attacker}\n"
-        f"🏰  *Defender:* {defender}\n\n"
-        f"⭐⭐⭐  `{destruction:.0f}%` destruction\n"
-        f"⏱  *Duration:* {dur}\n\n"
+        f"⚔️  *Urush turi:* {war_type}\n\n"
+        f"🗡  *Hujumchi:* {attacker}\n"
+        f"🏰  *Himoyachi:* {defender}\n\n"
+        f"⭐⭐⭐  `{destruction:.0f}%` vayronagarchilik\n"
+        f"⏱  *Vaqt:* {dur}\n\n"
         f"{hype}"
     )
 
@@ -176,68 +187,68 @@ def msg_war_status(war: dict) -> str:
     used  = clan.get("attacks", 0)
     total = war["teamSize"] * war.get("attacksPerMember", 2)
     emoji = {"preparation": "📋", "inWar": "⚔️", "warEnded": "🏁"}.get(state, "❓")
+    state_uz = {"preparation": "TAYYORGARLIK", "inWar": "URUSH DAVOM ETMOQDA", "warEnded": "URUSH TUGADI"}.get(state, state.upper())
 
     lines = [
-        f"{emoji} *War Status: {state.upper()}*", "",
+        f"{emoji} *Urush holati: {state_uz}*", "",
         f"🔵 *{clan['name']}*  vs  🔴 *{opp['name']}*",
         f"👥 {war['teamSize']}v{war['teamSize']}", "",
     ]
 
     if state == "preparation":
         start_time = parse_coc_time(war["startTime"])
-        now        = datetime.now(timezone.utc)
-        prep_left  = (start_time - now).total_seconds()
-        lines.append(f"⏳ War starts in: *{time_left_str(prep_left)}*")
-        lines.append(f"📣 Prepare your armies!")
+        prep_left  = (start_time - datetime.now(timezone.utc)).total_seconds()
+        lines.append(f"⏳ Urush boshlanishiga: *{time_left_str(prep_left)}*")
+        lines.append(f"📣 Qo'shinlarni tayyorlang!")
 
     elif state == "inWar":
-        lines += [
-            f"⭐ Stars:       `{clan['stars']}` — `{opp['stars']}`",
-            f"💥 Destruction: `{clan.get('destructionPercentage',0):.1f}%` — `{opp.get('destructionPercentage',0):.1f}%`",
-            f"⚔️  Attacks:    `{used}/{total}` ({total-used} left)",
-        ]
         rem = (parse_coc_time(war["endTime"]) - datetime.now(timezone.utc)).total_seconds()
+        lines += [
+            f"⭐ Yulduzlar:      `{clan['stars']}` — `{opp['stars']}`",
+            f"💥 Vayronagarchilik: `{clan.get('destructionPercentage',0):.1f}%` — `{opp.get('destructionPercentage',0):.1f}%`",
+            f"⚔️  Hujumlar:     `{used}/{total}` ({total-used} ta qoldi)",
+        ]
         if rem > 0:
-            lines.append(f"⏳ Time left: *{time_left_str(rem)}*")
+            lines.append(f"⏳ Qolgan vaqt: *{time_left_str(rem)}*")
 
     elif state == "warEnded":
         lines += [
-            f"⭐ Stars:       `{clan['stars']}` — `{opp['stars']}`",
-            f"💥 Destruction: `{clan.get('destructionPercentage',0):.1f}%` — `{opp.get('destructionPercentage',0):.1f}%`",
-            f"⚔️  Attacks:    `{used}/{total}`",
+            f"⭐ Yulduzlar:        `{clan['stars']}` — `{opp['stars']}`",
+            f"💥 Vayronagarchilik: `{clan.get('destructionPercentage',0):.1f}%` — `{opp.get('destructionPercentage',0):.1f}%`",
+            f"⚔️  Hujumlar:       `{used}/{total}`",
         ]
 
     return "\n".join(lines)
 
 def msg_war_result(war: dict) -> str:
     clan, opp = war["clan"], war["opponent"]
-    result    = war.get("result", "unknown")
-    attacks   = sorted(
+    result = war.get("result", "unknown")
+    attacks = sorted(
         [(m["name"], a["stars"], a["destructionPercentage"])
          for m in clan.get("members", []) for a in m.get("attacks", [])],
         key=lambda x: (x[1], x[2]), reverse=True
     )
     missed = [m["name"] for m in clan.get("members", []) if not m.get("attacks")]
     lines = [
-        f"{result_emoji(result)} *WAR ENDED — {result.upper()}*", "",
+        f"{result_emoji(result)} *URUSH TUGADI — {result_uz(result)}*", "",
         f"🔵 *{clan['name']}*",
-        f"   ⭐`{clan['stars']}`  💥`{clan.get('destructionPercentage',0):.1f}%`  ⚔️`{clan['attacks']}` attacks", "",
+        f"   ⭐`{clan['stars']}`  💥`{clan.get('destructionPercentage',0):.1f}%`  ⚔️`{clan['attacks']}` hujum", "",
         f"🔴 *{opp['name']}*",
-        f"   ⭐`{opp['stars']}`  💥`{opp.get('destructionPercentage',0):.1f}%`  ⚔️`{opp['attacks']}` attacks", "",
+        f"   ⭐`{opp['stars']}`  💥`{opp.get('destructionPercentage',0):.1f}%`  ⚔️`{opp['attacks']}` hujum", "",
     ]
     if attacks:
-        lines.append("🏅 *Top 5 Attacks:*")
+        lines.append("🏅 *Top 5 Hujum:*")
         for name, stars, dest in attacks[:5]:
             lines.append(f"   {stars_bar(stars)} `{dest:.0f}%` — {name}")
         lines.append("")
     if missed:
-        lines.append(f"😴 *Missed attacks ({len(missed)}):* " + ", ".join(missed))
+        lines.append(f"😴 *Hujum qilmaganlar ({len(missed)}):* " + ", ".join(missed))
     return "\n".join(lines)
 
 def msg_warlog(entries: list) -> str:
     if not entries:
-        return "📭 War log is empty or set to private in clan settings."
-    lines = ["📜 *Last 5 Wars:*", ""]
+        return "📭 Urush tarixi bo'sh yoki yopiq."
+    lines = ["📜 *Oxirgi 5 ta urush:*", ""]
     for i, w in enumerate(entries[:5], 1):
         c, o = w.get("clan", {}), w.get("opponent", {})
         lines.append(
@@ -249,38 +260,72 @@ def msg_warlog(entries: list) -> str:
 
 def msg_player(p: dict) -> str:
     hv = {h["name"]: h["level"] for h in p.get("heroes", []) if h.get("village") == "HOME_VILLAGE"}
-    war_pref = "✅ In" if p.get("warPreference") == "IN" else "❌ Out"
+    war_pref = "✅ Ishtirok etadi" if p.get("warPreference") == "IN" else "❌ Ishtirok etmaydi"
+    role = role_uz(p.get("role", ""))
+    clan_name = p.get("clan", {}).get("name", "Klan yo'q")
+    league = p.get("league", {}).get("name", "Ligasiz")
     return "\n".join([
         f"👤 *{p['name']}* (`{p['tag']}`)",
-        f"🏠 Town Hall *{p['townHallLevel']}*  |  🎖 XP {p['expLevel']}",
-        f"🏆 Trophies: `{p['trophies']}`  (Best: `{p['bestTrophies']}`)",
-        f"🛡 Clan: *{p.get('clan',{}).get('name','No Clan')}*  [{p.get('role','').replace('_',' ').title()}]",
-        f"🥇 League: {p.get('league',{}).get('name','Unranked')}",
+        f"🏠 Qishloq Darvozasi *{p['townHallLevel']}*  |  🎖 Daraja {p['expLevel']}",
+        f"🏆 Kuboklar: `{p['trophies']}`  (Eng ko'p: `{p['bestTrophies']}`)",
+        f"🛡 Klan: *{clan_name}*  [{role}]",
+        f"🥇 Liga: {league}",
         "",
-        "👑 *Heroes:*",
-        f"   Barbarian King: `{hv.get('Barbarian King', 0)}`",
-        f"   Archer Queen:   `{hv.get('Archer Queen', 0)}`",
-        f"   Grand Warden:   `{hv.get('Grand Warden', 0)}`",
-        f"   Royal Champion: `{hv.get('Royal Champion', 0)}`",
+        "👑 *Qahramonlar:*",
+        f"   Barbar Qirol:    `{hv.get('Barbarian King', 0)}`",
+        f"   Kamonchi Malika: `{hv.get('Archer Queen', 0)}`",
+        f"   Buyuk Qorovul:   `{hv.get('Grand Warden', 0)}`",
+        f"   Qirollik Chempion: `{hv.get('Royal Champion', 0)}`",
         "",
-        f"⭐ War Stars: `{p.get('warStars', 0)}`  |  War: {war_pref}",
-        f"🤝 Donations: `{p['donations']}` sent / `{p['donationsReceived']}` received",
-        f"🏰 Attack Wins: `{p.get('attackWins',0)}`  |  Defense Wins: `{p.get('defenseWins',0)}`",
+        f"⭐ Urush yulduzlari: `{p.get('warStars', 0)}`  |  Urush: {war_pref}",
+        f"🤝 Hadya: `{p['donations']}` berildi / `{p['donationsReceived']}` olindi",
+        f"🏰 Hujum g'alabalari: `{p.get('attackWins',0)}`  |  Mudofaa g'alabalari: `{p.get('defenseWins',0)}`",
     ])
+
+def msg_members(members: list) -> str:
+    if not members:
+        return "📭 A'zolar topilmadi."
+
+    # Sort by trophies descending
+    members = sorted(members, key=lambda m: m.get("trophies", 0), reverse=True)
+
+    lines = [f"👥 *Klan A'zolari ({len(members)} ta):*", ""]
+
+    role_icons = {
+        "LEADER":    "👑",
+        "COLEADER":  "⚜️",
+        "ELDER":     "🔰",
+        "MEMBER":    "👤",
+    }
+
+    for i, m in enumerate(members, 1):
+        role  = m.get("role", "MEMBER").upper()
+        icon  = role_icons.get(role, "👤")
+        th    = m.get("townHallLevel", "?")
+        troph = m.get("trophies", 0)
+        don   = m.get("donations", 0)
+        lines.append(
+            f"{i}. {icon} *{m['name']}*\n"
+            f"    🏠TH{th}  🏆{troph}  🤝{don} hadya\n"
+            f"    📌 {role_uz(role)}"
+        )
+
+    return "\n".join(lines)
 
 # ── TELEGRAM COMMANDS ─────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "⚔️ *CoC Clan Bot is Online!*\n\n"
-        "*Commands:*\n"
-        "• /war — live war status\n"
-        "• /warlog — last 5 war results\n"
-        "• /player #TAG — full player profile\n\n"
-        "*Auto-Alerts:*\n"
-        "• ⏰ 2hr & 30min war end warnings\n"
-        "• 🌟 Real-time 3-star notifications\n"
-        "• 🏁 Full war result when war ends",
+        "⚔️ *CoC Klan Boti faol!*\n\n"
+        "*Buyruqlar:*\n"
+        "• /urush — joriy urush holati\n"
+        "• /urushlog — oxirgi 5 ta urush\n"
+        "• /oyinchi \\#TAG — o'yinchi ma'lumotlari\n"
+        "• /azolar — klan a'zolari ro'yxati\n\n"
+        "*Avtomatik xabarlar:*\n"
+        "• ⏰ 2 soat va 30 daqiqalik ogohlantirishlar\n"
+        "• 🌟 3 yulduzli hujum bildirishnomasi\n"
+        "• 🏁 Urush tugaganda natija e'lon qilinadi",
         parse_mode="Markdown",
     )
 
@@ -288,7 +333,7 @@ async def cmd_war(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     async with aiohttp.ClientSession() as s:
         war = await get_current_war(s)
     if not war or war.get("state") in ("notInWar", None):
-        await update.message.reply_text("😴 Clan is not currently in a war.")
+        await update.message.reply_text("😴 Klan hozir urushda emas.")
         return
     await update.message.reply_text(msg_war_status(war), parse_mode="Markdown")
 
@@ -299,19 +344,36 @@ async def cmd_warlog(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_player(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
-        await update.message.reply_text("Usage: /player #PLAYERTAG\nExample: /player #2ABC123")
+        await update.message.reply_text("Ishlatish: /oyinchi #TAG\nMisol: /oyinchi #2ABC123")
         return
     async with aiohttp.ClientSession() as s:
         p = await get_player(s, ctx.args[0])
     if not p:
-        await update.message.reply_text("❌ Player not found — double-check the tag.")
+        await update.message.reply_text("❌ O'yinchi topilmadi — tegni tekshiring.")
         return
     await update.message.reply_text(msg_player(p), parse_mode="Markdown")
+
+async def cmd_members(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ A'zolar yuklanmoqda...")
+    async with aiohttp.ClientSession() as s:
+        members = await get_clan_members(s)
+    if not members:
+        await update.message.reply_text("❌ A'zolar ma'lumotini olishda xatolik.")
+        return
+    # Split into chunks if too long for one message
+    text = msg_members(members)
+    if len(text) > 4000:
+        # Send in two halves
+        mid = len(members) // 2
+        await update.message.reply_text(msg_members(members[:mid]), parse_mode="Markdown")
+        await update.message.reply_text(msg_members(members[mid:]), parse_mode="Markdown")
+    else:
+        await update.message.reply_text(text, parse_mode="Markdown")
 
 # ── WAR MONITOR LOOP ──────────────────────────────────────────────────────────
 
 async def war_monitor(bot: Bot):
-    log.info("War monitor started (every %ds).", POLL_INTERVAL)
+    log.info("Urush monitoru boshlandi (har %ds).", POLL_INTERVAL)
     while True:
         try:
             async with aiohttp.ClientSession() as s:
@@ -325,11 +387,11 @@ async def war_monitor(bot: Bot):
                     if _state["war_end_time"] != end_time:
                         _reset_war_state(end_time)
 
-                    remaining = (parse_coc_time(end_time) - datetime.now(timezone.utc)).total_seconds()
-                    clan, opp = war["clan"], war["opponent"]
+                    remaining    = (parse_coc_time(end_time) - datetime.now(timezone.utc)).total_seconds()
+                    clan, opp    = war["clan"], war["opponent"]
                     attacks_left = war["teamSize"] * war.get("attacksPerMember", 2) - clan.get("attacks", 0)
 
-                    # 3-star alerts
+                    # 3-yulduz bildirishnomasi
                     for hit in find_new_3stars(war):
                         await bot.send_message(
                             TELEGRAM_CHAT,
@@ -341,31 +403,35 @@ async def war_monitor(bot: Bot):
                             parse_mode="Markdown",
                         )
                         _state["three_star_seen"].add(hit["key"])
-                        log.info("3⭐ sent: %s", hit["attacker_name"])
+                        log.info("3⭐ yuborildi: %s", hit["attacker_name"])
 
-                    # 2h reminder
+                    # 2 soatlik ogohlantirish
                     if 0 < remaining <= 7200 and not _state["reminded_2h"]:
                         await bot.send_message(
                             TELEGRAM_CHAT,
-                            f"⏰ *War ends in ~2 hours!*\n\n"
+                            f"⏰ *Urush tugashiga ~2 soat qoldi!*\n\n"
                             f"🔵 {clan['name']}: ⭐`{clan['stars']}` 💥`{clan.get('destructionPercentage',0):.1f}%`\n"
                             f"🔴 {opp['name']}: ⭐`{opp['stars']}` 💥`{opp.get('destructionPercentage',0):.1f}%`\n\n"
-                            f"⚔️ Attacks remaining: *{attacks_left}*\n📣 Don't forget to attack!",
+                            f"⚔️ Qolgan hujumlar: *{attacks_left}*\n"
+                            f"📣 Hujum qilishni unutmang!",
                             parse_mode="Markdown",
                         )
                         _state["reminded_2h"] = True
+                        log.info("2 soatlik ogohlantirish yuborildi.")
 
-                    # 30m reminder
+                    # 30 daqiqalik ogohlantirish
                     if 0 < remaining <= 1800 and not _state["reminded_30m"]:
                         await bot.send_message(
                             TELEGRAM_CHAT,
-                            f"🚨 *FINAL WARNING — War ends in 30 minutes!*\n\n"
+                            f"🚨 *OXIRGI OGOHLANTIRISH — Urush tugashiga 30 daqiqa qoldi!*\n\n"
                             f"🔵 {clan['name']}: ⭐`{clan['stars']}` 💥`{clan.get('destructionPercentage',0):.1f}%`\n"
                             f"🔴 {opp['name']}: ⭐`{opp['stars']}` 💥`{opp.get('destructionPercentage',0):.1f}%`\n\n"
-                            f"⚔️ Attacks remaining: *{attacks_left}*\n⚠️ Last chance — attack *NOW*!",
+                            f"⚔️ Qolgan hujumlar: *{attacks_left}*\n"
+                            f"⚠️ Oxirgi imkoniyat — *HOZIROQ* hujum qiling!",
                             parse_mode="Markdown",
                         )
                         _state["reminded_30m"] = True
+                        log.info("30 daqiqalik ogohlantirish yuborildi.")
 
                 elif state == "warEnded":
                     end_time = war.get("endTime", "")
@@ -374,44 +440,34 @@ async def war_monitor(bot: Bot):
                     if not _state["posted_result"]:
                         await bot.send_message(TELEGRAM_CHAT, msg_war_result(war), parse_mode="Markdown")
                         _state["posted_result"] = True
-                        log.info("War result posted.")
+                        log.info("Urush natijasi e'lon qilindi.")
 
         except Exception as exc:
-            log.error("Monitor error: %s", exc)
+            log.error("Monitor xatosi: %s", exc)
 
         await asyncio.sleep(POLL_INTERVAL)
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 
 async def run():
-    """
-    Build and run everything inside a single asyncio.run() call.
-    This avoids the Python 3.14 'no current event loop' bug that
-    affects run_webhook() and run_polling() when called from main().
-    """
     app = (
         Application.builder()
         .token(BOT_TOKEN)
         .build()
     )
 
-    app.add_handler(CommandHandler("start",  cmd_start))
-    app.add_handler(CommandHandler("war",    cmd_war))
-    app.add_handler(CommandHandler("warlog", cmd_warlog))
-    app.add_handler(CommandHandler("player", cmd_player))
+    app.add_handler(CommandHandler("start",    cmd_start))
+    app.add_handler(CommandHandler("urush",    cmd_war))
+    app.add_handler(CommandHandler("urushlog", cmd_warlog))
+    app.add_handler(CommandHandler("oyinchi",  cmd_player))
+    app.add_handler(CommandHandler("azolar",   cmd_members))
 
     async with app:
         await app.initialize()
         await app.start()
-
-        # Start war monitor alongside the bot
         monitor_task = asyncio.create_task(war_monitor(app.bot))
-        log.info("Bot and war monitor running…")
-
-        # Start polling (no webhook needed — works perfectly on Render)
+        log.info("Bot va urush monitori ishlamoqda...")
         await app.updater.start_polling(drop_pending_updates=True)
-
-        # Keep running until interrupted
         try:
             await asyncio.Event().wait()
         except (KeyboardInterrupt, SystemExit):
