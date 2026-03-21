@@ -1,0 +1,28 @@
+# render.yaml — drop this in your GitHub repo root
+# Render will auto-detect it and configure the service for you
+
+services:
+  - type: web
+    name: coc-clan-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    plan: free                  # free tier is fine for a bot
+
+    # Render injects PORT automatically — no need to set it here
+    envVars:
+      - key: COC_API_KEY
+        sync: false             # you fill this in the Render dashboard
+
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+
+      - key: CLAN_TAG
+        sync: false             # e.g.  #2ABC123
+
+      - key: TELEGRAM_CHAT_ID
+        sync: false             # e.g.  -1001234567890
+
+      - key: WEBHOOK_URL
+        sync: false             # e.g.  https://coc-clan-bot.onrender.com
+                                # (Render gives you this URL after first deploy)
