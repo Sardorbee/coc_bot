@@ -78,6 +78,10 @@ def _reset_war_state(end_time: str):
     })
     log.info("Urush holati yangilandi (endTime=%s)", end_time)
 
+# ── MEMBER TRACKING STATE ─────────────────────────────────────────────────────
+_known_members: dict[str, str] = {}   # tag → name
+_members_initialized: bool = False
+
 # ── COC API ───────────────────────────────────────────────────────────────────
 
 def encode_tag(tag: str) -> str:
@@ -282,33 +286,47 @@ def msg_player(p: dict) -> str:
         f"🏰 Hujum g'alabalari: `{p.get('attackWins',0)}`  |  Mudofaa g'alabalari: `{p.get('defenseWins',0)}`",
     ])
 
-def msg_members(members: list) -> str:
+def msg_members(members: list, title: str = None) -> str:
     if not members:
         return "📭 A'zolar topilmadi."
 
-    # Sort by trophies descending
-    members = sorted(members, key=lambda m: m.get("trophies", 0), reverse=True)
-
-    lines = [f"👥 *Klan A'zolari ({len(members)} ta):*", ""]
-
     role_icons = {
-        "LEADER":    "👑",
-        "COLEADER":  "⚜️",
-        "ELDER":     "🔰",
-        "MEMBER":    "👤",
+        "LEADER":   "👑",
+        "COLEADER": "⚜️",
+        "ELDER":    "🔰",
+        "MEMBER":   "👤",
+    }
+    role_labels = {
+        "LEADER":   "Leader",
+        "COLEADER": "Co-Leader",
+        "ELDER":    "Elder",
+        "MEMBER":   "Member",
     }
 
-    for i, m in enumerate(members, 1):
-        role  = m.get("role", "MEMBER").upper()
-        icon  = role_icons.get(role, "👤")
-        th    = m.get("townHallLevel", "?")
-        troph = m.get("trophies", 0)
-        don   = m.get("donations", 0)
-        lines.append(
-            f"{i}. {icon} *{m['name']}*\n"
-            f"    🏠TH{th}  🏆{troph}  🤝{don} hadya\n"
-            f"    📌 {role_uz(role)}"
-        )
+    # Group by TH level descending
+    from collections import defaultdict
+    by_th = defaultdict(list)
+    for m in members:
+        by_th[m.get("townHallLevel", 0)].append(m)
+
+    header = title or f"👥 *Klan A'zolari — {len(members)} ta*"
+    lines  = [header, ""]
+
+    for th in sorted(by_th.keys(), reverse=True):
+        group = sorted(by_th[th], key=lambda m: m.get("trophies", 0), reverse=True)
+        lines.append(f"🏠 *Town Hall {th}* ({len(group)} ta)")
+        lines.append("─" * 24)
+        for m in group:
+            role  = m.get("role", "MEMBER").upper()
+            icon  = role_icons.get(role, "👤")
+            label = role_labels.get(role, role.title())
+            troph = m.get("trophies", 0)
+            don   = m.get("donations", 0)
+            lines.append(
+                f"{icon} *{m['name']}*  —  {label}\n"
+                f"    🏆 {troph} kubok  |  🤝 {don} hadya"
+            )
+        lines.append("")
 
     return "\n".join(lines)
 
@@ -320,9 +338,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "*Buyruqlar:*\n"
         "• /urush — joriy urush holati\n"
         "• /urushlog — oxirgi 5 ta urush\n"
-        "• /oyinchi \\#TAG — o'yinchi ma'lumotlari\n"
-        "• /azolar — klan a'zolari ro'yxati\n\n"
+        "• /oyinchi #TAG — o'yinchi ma'lumotlari\n"
+        "• /azolar — barcha a'zolar (TH bo'yicha)\n"
+        "• /azolar 14 — faqat TH14 a'zolari\n\n"
         "*Avtomatik xabarlar:*\n"
+        "• ✅ A'zo klanga qo'shilganda\n"
+        "• 👋 A'zo klandan chiqqanda\n"
         "• ⏰ 2 soat va 30 daqiqalik ogohlantirishlar\n"
         "• 🌟 3 yulduzli hujum bildirishnomasi\n"
         "• 🏁 Urush tugaganda natija e'lon qilinadi",
@@ -354,30 +375,80 @@ async def cmd_player(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg_player(p), parse_mode="Markdown")
 
 async def cmd_members(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # Optional TH filter: /azolar th14  or  /azolar 14
+    th_filter = None
+    if ctx.args:
+        arg = ctx.args[0].lower().replace("th", "").strip()
+        if arg.isdigit():
+            th_filter = int(arg)
+
     await update.message.reply_text("⏳ A'zolar yuklanmoqda...")
     async with aiohttp.ClientSession() as s:
         members = await get_clan_members(s)
     if not members:
         await update.message.reply_text("❌ A'zolar ma'lumotini olishda xatolik.")
         return
-    # Split into chunks if too long for one message
-    text = msg_members(members)
-    if len(text) > 4000:
-        # Send in two halves
-        mid = len(members) // 2
-        await update.message.reply_text(msg_members(members[:mid]), parse_mode="Markdown")
-        await update.message.reply_text(msg_members(members[mid:]), parse_mode="Markdown")
+
+    if th_filter:
+        filtered = [m for m in members if m.get("townHallLevel") == th_filter]
+        if not filtered:
+            await update.message.reply_text(f"❌ TH{th_filter} darajali a'zolar topilmadi.")
+            return
+        title = f"🏠 *TH{th_filter} A'zolari — {len(filtered)} ta*"
+        chunks = [filtered]
     else:
-        await update.message.reply_text(text, parse_mode="Markdown")
+        title = None
+        # Split into groups of 15 to avoid message too long
+        chunks = [members[i:i+15] for i in range(0, len(members), 15)]
+
+    first = True
+    for chunk in chunks:
+        t = msg_members(chunk, title if first else "")
+        await update.message.reply_text(t, parse_mode="Markdown")
+        first = False
 
 # ── WAR MONITOR LOOP ──────────────────────────────────────────────────────────
 
 async def war_monitor(bot: Bot):
+    global _known_members, _members_initialized
     log.info("Urush monitoru boshlandi (har %ds).", POLL_INTERVAL)
     while True:
         try:
             async with aiohttp.ClientSession() as s:
-                war = await get_current_war(s)
+                war     = await get_current_war(s)
+                members = await get_clan_members(s)
+
+            # ── Join / Leave tracking ─────────────────────────────────────
+            if members:
+                current = {m["tag"]: m["name"] for m in members}
+
+                if not _members_initialized:
+                    _known_members       = current
+                    _members_initialized = True
+                    log.info("A'zolar boshlang'ich holati saqlandi (%d ta).", len(_known_members))
+                else:
+                    joined_tags = current.keys()  - _known_members.keys()
+                    left_tags   = _known_members.keys() - current.keys()
+
+                    for tag in joined_tags:
+                        name = current[tag]
+                        await bot.send_message(
+                            TELEGRAM_CHAT,
+                            f"✅ *{name}* klanga qo'shildi!\n🏠 Xush kelibsiz!",
+                            parse_mode="Markdown",
+                        )
+                        log.info("Qo'shildi: %s", name)
+
+                    for tag in left_tags:
+                        name = _known_members[tag]
+                        await bot.send_message(
+                            TELEGRAM_CHAT,
+                            f"👋 *{name}* klandan chiqib ketdi.",
+                            parse_mode="Markdown",
+                        )
+                        log.info("Chiqdi: %s", name)
+
+                    _known_members = current
 
             if war:
                 state = war.get("state")
@@ -466,7 +537,7 @@ async def run():
         await app.initialize()
         await app.start()
         monitor_task = asyncio.create_task(war_monitor(app.bot))
-        log.info("Bot va urush monitori ishlamoqda...")
+        log.info("Bot va urush monitoru ishlamoqda...")
         await app.updater.start_polling(drop_pending_updates=True)
         try:
             await asyncio.Event().wait()
