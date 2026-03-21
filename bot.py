@@ -3,9 +3,9 @@
 ║        Clash of Clans — Telegram Bot  (Render Edition)       ║
 ║──────────────────────────────────────────────────────────────║
 ║  Render requires:                                            ║
-║   • A real HTTP server (Flask) so the service stays alive    ║
 ║   • Webhook mode instead of polling                          ║
 ║   • PORT env var respected (Render sets this automatically)  ║
+║   • PTB's built-in server handles both Telegram + health     ║
 ║──────────────────────────────────────────────────────────────║
 ║  Features:                                                   ║
 ║   ⏰  War end reminder  (2 hr + 30 min warnings)             ║
@@ -20,11 +20,9 @@
 import asyncio
 import logging
 import os
-import threading
 from datetime import datetime, timezone
 
 import aiohttp
-from flask import Flask, Response
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -343,47 +341,21 @@ async def war_monitor(bot: Bot):
 
         await asyncio.sleep(POLL_INTERVAL)
 
-# ── FLASK HEALTH SERVER ───────────────────────────────────────────────────────
-# Render requires a web server to keep the service alive.
-# This tiny Flask app answers health checks on the PORT Render provides.
-
-flask_app = Flask(__name__)
-
-@flask_app.route("/")
-def health():
-    return Response("⚔️ CoC Bot is running!", status=200, mimetype="text/plain")
-
-@flask_app.route("/webhook", methods=["POST"])
-def webhook_stub():
-    # Placeholder — actual webhook handling is done by python-telegram-bot below
-    return Response("ok", status=200)
-
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=PORT, use_reloader=False)
-
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 
 async def post_init(app: Application):
-    # Register webhook with Telegram
-    webhook_endpoint = f"{WEBHOOK_URL}/tg_webhook"
-    await app.bot.set_webhook(url=webhook_endpoint)
-    log.info("Webhook set → %s", webhook_endpoint)
-    # Launch war monitor as background task
+    """Runs after bot initialises — set webhook + start war monitor."""
+    await app.bot.set_webhook(url=f"{WEBHOOK_URL}/tg_webhook")
+    log.info("Webhook registered → %s/tg_webhook", WEBHOOK_URL)
     asyncio.create_task(war_monitor(app.bot))
 
 
 async def post_shutdown(app: Application):
     await app.bot.delete_webhook()
-    log.info("Webhook deleted.")
+    log.info("Webhook removed.")
 
 
 def main():
-    # Start Flask in a background thread (keeps Render happy)
-    t = threading.Thread(target=run_flask, daemon=True)
-    t.start()
-    log.info("Flask health server started on port %d.", PORT)
-
-    # Build Telegram app in webhook mode
     app = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -397,10 +369,13 @@ def main():
     app.add_handler(CommandHandler("warlog", cmd_warlog))
     app.add_handler(CommandHandler("player", cmd_player))
 
-    log.info("Bot starting in webhook mode…")
+    log.info("Bot starting on port %d (webhook mode)…", PORT)
+
+    # PTB's built-in webhook server — this also acts as the HTTP server
+    # Render pings "/" for health checks, PTB handles that via url_path
     app.run_webhook(
         listen="0.0.0.0",
-        port=PORT + 1,          # PTB webhook on a different port from Flask
+        port=PORT,
         webhook_url=f"{WEBHOOK_URL}/tg_webhook",
         url_path="/tg_webhook",
         drop_pending_updates=True,
