@@ -20,18 +20,35 @@
 import asyncio
 import logging
 import os
+import threading
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import aiohttp
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-COC_API_KEY   = os.environ["COC_API_KEY"]           # raise if missing
+COC_API_KEY   = os.environ["COC_API_KEY"]
 BOT_TOKEN     = os.environ["TELEGRAM_BOT_TOKEN"]
 CLAN_TAG      = os.environ["CLAN_TAG"]
 TELEGRAM_CHAT = os.environ["TELEGRAM_CHAT_ID"]
-POLL_INTERVAL = 60                                  # war monitor cadence (seconds)
+PORT          = int(os.getenv("PORT", "10000"))    # Render sets this automatically
+POLL_INTERVAL = 60                                 # war monitor cadence (seconds)
+
+# ── HEALTH SERVER (required by Render to detect open port) ────────────────────
+class _Health(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def log_message(self, *_):
+        pass   # silence access logs
+
+def _start_health_server():
+    HTTPServer(("0.0.0.0", PORT), _Health).serve_forever()
+
+threading.Thread(target=_start_health_server, daemon=True).start()
 
 COC_BASE = "https://api.clashofclans.com/v1"
 HEADERS  = {"Authorization": f"Bearer {COC_API_KEY}", "Accept": "application/json"}
