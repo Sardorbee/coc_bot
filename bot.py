@@ -31,9 +31,6 @@ COC_API_KEY   = os.environ["COC_API_KEY"]           # raise if missing
 BOT_TOKEN     = os.environ["TELEGRAM_BOT_TOKEN"]
 CLAN_TAG      = os.environ["CLAN_TAG"]
 TELEGRAM_CHAT = os.environ["TELEGRAM_CHAT_ID"]
-WEBHOOK_URL   = os.environ["WEBHOOK_URL"]           # e.g. https://your-app.onrender.com
-
-PORT          = int(os.getenv("PORT", "10000"))     # Render injects PORT
 POLL_INTERVAL = 60                                  # war monitor cadence (seconds)
 
 COC_BASE = "https://api.clashofclans.com/v1"
@@ -343,24 +340,15 @@ async def war_monitor(bot: Bot):
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 
-async def post_init(app: Application):
-    """Runs after bot initialises — set webhook + start war monitor."""
-    await app.bot.set_webhook(url=f"{WEBHOOK_URL}/tg_webhook")
-    log.info("Webhook registered → %s/tg_webhook", WEBHOOK_URL)
-    asyncio.create_task(war_monitor(app.bot))
-
-
-async def post_shutdown(app: Application):
-    await app.bot.delete_webhook()
-    log.info("Webhook removed.")
-
-
-def main():
+async def run():
+    """
+    Build and run everything inside a single asyncio.run() call.
+    This avoids the Python 3.14 'no current event loop' bug that
+    affects run_webhook() and run_polling() when called from main().
+    """
     app = (
         Application.builder()
         .token(BOT_TOKEN)
-        .post_init(post_init)
-        .post_shutdown(post_shutdown)
         .build()
     )
 
@@ -369,18 +357,27 @@ def main():
     app.add_handler(CommandHandler("warlog", cmd_warlog))
     app.add_handler(CommandHandler("player", cmd_player))
 
-    log.info("Bot starting on port %d (webhook mode)…", PORT)
+    async with app:
+        await app.initialize()
+        await app.start()
 
-    # PTB's built-in webhook server — this also acts as the HTTP server
-    # Render pings "/" for health checks, PTB handles that via url_path
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=f"{WEBHOOK_URL}/tg_webhook",
-        url_path="/tg_webhook",
-        drop_pending_updates=True,
-    )
+        # Start war monitor alongside the bot
+        monitor_task = asyncio.create_task(war_monitor(app.bot))
+        log.info("Bot and war monitor running…")
+
+        # Start polling (no webhook needed — works perfectly on Render)
+        await app.updater.start_polling(drop_pending_updates=True)
+
+        # Keep running until interrupted
+        try:
+            await asyncio.Event().wait()
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        finally:
+            monitor_task.cancel()
+            await app.updater.stop()
+            await app.stop()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(run())
