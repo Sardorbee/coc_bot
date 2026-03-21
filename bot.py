@@ -33,18 +33,23 @@ COC_API_KEY   = os.environ["COC_API_KEY"]
 BOT_TOKEN     = os.environ["TELEGRAM_BOT_TOKEN"]
 CLAN_TAG      = os.environ["CLAN_TAG"]
 TELEGRAM_CHAT = os.environ["TELEGRAM_CHAT_ID"]
-PORT          = int(os.getenv("PORT", "10000"))    # Render sets this automatically
-FIXIE_URL     = os.getenv("FIXIE_URL", None)       # e.g. http://fixie:TOKEN@velodrome.usefixie.com:8080
-POLL_INTERVAL = 60                                 # war monitor cadence (seconds)
+PORT          = int(os.getenv("PORT", "10000"))
+POLL_INTERVAL = 60
 
 # ── HEALTH SERVER (required by Render to detect open port) ────────────────────
 class _Health(BaseHTTPRequestHandler):
     def do_GET(self):
+        import urllib.request
+        try:
+            ip = urllib.request.urlopen("https://api.ipify.org", timeout=5).read().decode()
+        except Exception:
+            ip = "unavailable"
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"OK")
+        self.wfile.write(f"CoC Bot running | Outbound IP: {ip}".encode())
+
     def log_message(self, *_):
-        pass   # silence access logs
+        pass
 
 def _start_health_server():
     HTTPServer(("0.0.0.0", PORT), _Health).serve_forever()
@@ -90,7 +95,6 @@ async def coc_get(session: aiohttp.ClientSession, path: str):
         async with session.get(
             f"{COC_BASE}{path}",
             headers=HEADERS,
-            proxy=FIXIE_URL,                        # None = direct, set = goes via Fixie
             timeout=aiohttp.ClientTimeout(total=10)
         ) as r:
             if r.status == 200:
