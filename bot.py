@@ -34,6 +34,7 @@ BOT_TOKEN     = os.environ["TELEGRAM_BOT_TOKEN"]
 CLAN_TAG      = os.environ["CLAN_TAG"]
 TELEGRAM_CHAT = os.environ["TELEGRAM_CHAT_ID"]
 PORT          = int(os.getenv("PORT", "10000"))    # Render sets this automatically
+FIXIE_URL     = os.getenv("FIXIE_URL", None)       # e.g. http://fixie:TOKEN@velodrome.usefixie.com:8080
 POLL_INTERVAL = 60                                 # war monitor cadence (seconds)
 
 # ── HEALTH SERVER (required by Render to detect open port) ────────────────────
@@ -87,7 +88,9 @@ def encode_tag(tag: str) -> str:
 async def coc_get(session: aiohttp.ClientSession, path: str):
     try:
         async with session.get(
-            f"{COC_BASE}{path}", headers=HEADERS,
+            f"{COC_BASE}{path}",
+            headers=HEADERS,
+            proxy=FIXIE_URL,                        # None = direct, set = goes via Fixie
             timeout=aiohttp.ClientTimeout(total=10)
         ) as r:
             if r.status == 200:
@@ -169,18 +172,37 @@ def msg_war_status(war: dict) -> str:
     used  = clan.get("attacks", 0)
     total = war["teamSize"] * war.get("attacksPerMember", 2)
     emoji = {"preparation": "📋", "inWar": "⚔️", "warEnded": "🏁"}.get(state, "❓")
+
     lines = [
         f"{emoji} *War Status: {state.upper()}*", "",
         f"🔵 *{clan['name']}*  vs  🔴 *{opp['name']}*",
         f"👥 {war['teamSize']}v{war['teamSize']}", "",
-        f"⭐ Stars:       `{clan['stars']}` — `{opp['stars']}`",
-        f"💥 Destruction: `{clan.get('destructionPercentage',0):.1f}%` — `{opp.get('destructionPercentage',0):.1f}%`",
-        f"⚔️  Attacks:    `{used}/{total}` ({total-used} left)",
     ]
-    if state == "inWar":
+
+    if state == "preparation":
+        start_time = parse_coc_time(war["startTime"])
+        now        = datetime.now(timezone.utc)
+        prep_left  = (start_time - now).total_seconds()
+        lines.append(f"⏳ War starts in: *{time_left_str(prep_left)}*")
+        lines.append(f"📣 Prepare your armies!")
+
+    elif state == "inWar":
+        lines += [
+            f"⭐ Stars:       `{clan['stars']}` — `{opp['stars']}`",
+            f"💥 Destruction: `{clan.get('destructionPercentage',0):.1f}%` — `{opp.get('destructionPercentage',0):.1f}%`",
+            f"⚔️  Attacks:    `{used}/{total}` ({total-used} left)",
+        ]
         rem = (parse_coc_time(war["endTime"]) - datetime.now(timezone.utc)).total_seconds()
         if rem > 0:
             lines.append(f"⏳ Time left: *{time_left_str(rem)}*")
+
+    elif state == "warEnded":
+        lines += [
+            f"⭐ Stars:       `{clan['stars']}` — `{opp['stars']}`",
+            f"💥 Destruction: `{clan.get('destructionPercentage',0):.1f}%` — `{opp.get('destructionPercentage',0):.1f}%`",
+            f"⚔️  Attacks:    `{used}/{total}`",
+        ]
+
     return "\n".join(lines)
 
 def msg_war_result(war: dict) -> str:
@@ -261,7 +283,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_war(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     async with aiohttp.ClientSession() as s:
         war = await get_current_war(s)
-    if not war or war.get("state") == "notInWar":
+    if not war or war.get("state") in ("notInWar", None):
         await update.message.reply_text("😴 Clan is not currently in a war.")
         return
     await update.message.reply_text(msg_war_status(war), parse_mode="Markdown")
