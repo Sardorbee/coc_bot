@@ -32,6 +32,7 @@ BOT_TOKEN     = os.environ["TELEGRAM_BOT_TOKEN"]
 CLAN_TAG      = os.environ["CLAN_TAG"]
 TELEGRAM_CHAT = os.environ["TELEGRAM_CHAT_ID"]
 PORT          = int(os.getenv("PORT", "10000"))
+RENDER_URL    = os.getenv("RENDER_URL", "")      # e.g. https://coc-clan-bot.onrender.com
 POLL_INTERVAL = 60
 
 # ── HEALTH SERVER ─────────────────────────────────────────────────────────────
@@ -52,6 +53,23 @@ def _start_health_server():
     HTTPServer(("0.0.0.0", PORT), _Health).serve_forever()
 
 threading.Thread(target=_start_health_server, daemon=True).start()
+
+# ── SELF-PING (keeps Render free tier awake) ──────────────────────────────────
+async def keep_alive():
+    """Ping our own health endpoint every 10 minutes so Render never sleeps."""
+    if not RENDER_URL:
+        log.info("RENDER_URL not set — keep-alive disabled.")
+        return
+    await asyncio.sleep(30)   # wait for server to fully start first
+    log.info("Keep-alive started → pinging %s every 10 min.", RENDER_URL)
+    while True:
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(RENDER_URL, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                    log.info("Keep-alive ping → HTTP %s", r.status)
+        except Exception as e:
+            log.warning("Keep-alive ping failed: %s", e)
+        await asyncio.sleep(600)   # 10 minutes
 
 COC_BASE = "https://api.clashofclans.com/v1"
 HEADERS  = {"Authorization": f"Bearer {COC_API_KEY}", "Accept": "application/json"}
@@ -717,7 +735,8 @@ async def run():
     async with app:
         await app.initialize()
         await app.start()
-        monitor_task = asyncio.create_task(war_monitor(app.bot))
+        monitor_task   = asyncio.create_task(war_monitor(app.bot))
+        keepalive_task = asyncio.create_task(keep_alive())
         log.info("Bot va urush monitoru ishlamoqda...")
         await app.updater.start_polling(drop_pending_updates=True)
         try:
@@ -726,6 +745,7 @@ async def run():
             pass
         finally:
             monitor_task.cancel()
+            keepalive_task.cancel()
             await app.updater.stop()
             await app.stop()
 
