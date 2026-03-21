@@ -23,8 +23,8 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import aiohttp
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 COC_API_KEY   = os.environ["COC_API_KEY"]
@@ -121,7 +121,7 @@ def parse_coc_time(ts: str) -> datetime:
 
 def time_left_str(sec: float) -> str:
     h, m = int(sec // 3600), int((sec % 3600) // 60)
-    return f"{h}s {m}d" if h else f"{m}d"
+    return f"{h}soat {m}min" if h else f"{m}min"
 
 def stars_bar(n: int) -> str:
     return "⭐" * n + "☆" * (3 - n)
@@ -333,8 +333,41 @@ def msg_members(members: list, title: str = None) -> str:
 # ── TELEGRAM COMMANDS ─────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [
+            InlineKeyboardButton("⚔️ Urush holati", callback_data="war"),
+            InlineKeyboardButton("📜 Urush tarixi", callback_data="warlog"),
+        ],
+        [
+            InlineKeyboardButton("👥 A'zolar", callback_data="azolar"),
+            InlineKeyboardButton("🏠 TH bo'yicha", callback_data="azolar_th"),
+        ],
+        [
+            InlineKeyboardButton("📖 Yordam", callback_data="help"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
     await update.message.reply_text(
         "⚔️ *CoC Klan Boti faol!*\n\n"
+        "Quyidagi tugmalardan foydalaning yoki buyruq yozing:",
+        parse_mode="Markdown",
+        reply_markup=reply_markup,
+    )
+
+
+async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [
+            InlineKeyboardButton("⚔️ Urush holati", callback_data="war"),
+            InlineKeyboardButton("📜 Urush tarixi", callback_data="warlog"),
+        ],
+        [
+            InlineKeyboardButton("👥 Barcha a'zolar", callback_data="azolar"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
         "*Buyruqlar:*\n"
         "• /urush — joriy urush holati\n"
         "• /urushlog — oxirgi 5 ta urush\n"
@@ -348,7 +381,146 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• 🌟 3 yulduzli hujum bildirishnomasi\n"
         "• 🏁 Urush tugaganda natija e'lon qilinadi",
         parse_mode="Markdown",
+        reply_markup=reply_markup,
     )
+
+
+async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()   # removes the loading spinner on the button
+
+    data = query.data
+
+    if data == "war":
+        async with aiohttp.ClientSession() as s:
+            war = await get_current_war(s)
+        if not war or war.get("state") in ("notInWar", None):
+            await query.edit_message_text("😴 Klan hozir urushda emas.")
+        else:
+            keyboard = [[InlineKeyboardButton("🔄 Yangilash", callback_data="war")]]
+            await query.edit_message_text(
+                msg_war_status(war),
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+    elif data == "warlog":
+        async with aiohttp.ClientSession() as s:
+            entries = await get_war_log(s)
+        keyboard = [[InlineKeyboardButton("🔙 Orqaga", callback_data="back_start")]]
+        await query.edit_message_text(
+            msg_warlog(entries),
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif data == "azolar":
+        await query.edit_message_text("⏳ A'zolar yuklanmoqda...")
+        async with aiohttp.ClientSession() as s:
+            members = await get_clan_members(s)
+        if not members:
+            await query.edit_message_text("❌ A'zolar ma'lumotini olishda xatolik.")
+            return
+        # Show TH filter buttons
+        ths = sorted({m.get("townHallLevel", 0) for m in members}, reverse=True)
+        th_buttons = [
+            InlineKeyboardButton(f"TH{th}", callback_data=f"th_{th}")
+            for th in ths
+        ]
+        # Group buttons in rows of 4
+        rows = [th_buttons[i:i+4] for i in range(0, len(th_buttons), 4)]
+        rows.append([InlineKeyboardButton("👥 Barchasi", callback_data="azolar_all")])
+        rows.append([InlineKeyboardButton("🔙 Orqaga", callback_data="back_start")])
+        await query.edit_message_text(
+            f"🏠 *Qaysi TH ko'rishni xohlaysiz?*\nJami: {len(members)} ta a'zo",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+
+    elif data == "azolar_all":
+        await query.edit_message_text("⏳ Yuklanmoqda...")
+        async with aiohttp.ClientSession() as s:
+            members = await get_clan_members(s)
+        keyboard = [[InlineKeyboardButton("🔙 Orqaga", callback_data="azolar")]]
+        text = msg_members(members)
+        # Telegram max message length is 4096
+        if len(text) > 4000:
+            await query.edit_message_text(
+                "📋 A'zolar ro'yxati juda uzun, iltimos /azolar buyrug'ini ishlating.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+        else:
+            await query.edit_message_text(
+                text,
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+    elif data.startswith("th_"):
+        th = int(data.split("_")[1])
+        await query.edit_message_text("⏳ Yuklanmoqda...")
+        async with aiohttp.ClientSession() as s:
+            members = await get_clan_members(s)
+        filtered = [m for m in members if m.get("townHallLevel") == th]
+        keyboard = [[InlineKeyboardButton("🔙 Orqaga", callback_data="azolar")]]
+        if not filtered:
+            await query.edit_message_text(
+                f"❌ TH{th} darajali a'zolar topilmadi.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+        else:
+            await query.edit_message_text(
+                msg_members(filtered, title=f"🏠 *TH{th} A'zolari — {len(filtered)} ta*"),
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+    elif data == "help":
+        keyboard = [
+            [
+                InlineKeyboardButton("⚔️ Urush", callback_data="war"),
+                InlineKeyboardButton("📜 Tarix", callback_data="warlog"),
+                InlineKeyboardButton("👥 A'zolar", callback_data="azolar"),
+            ],
+            [InlineKeyboardButton("🔙 Orqaga", callback_data="back_start")],
+        ]
+        await query.edit_message_text(
+            "*Buyruqlar:*\n"
+            "• /urush — joriy urush holati\n"
+            "• /urushlog — oxirgi 5 ta urush\n"
+            "• /oyinchi #TAG — o'yinchi ma'lumotlari\n"
+            "• /azolar — barcha a'zolar\n"
+            "• /azolar 14 — TH14 a'zolari\n\n"
+            "*Avtomatik:*\n"
+            "• ✅ Klanga qo'shilish / 👋 Chiqish\n"
+            "• ⏰ Urush ogohlantirishlari\n"
+            "• 🌟 3 yulduz bildirishnomasi\n"
+            "• 🏁 Urush natijasi",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    elif data == "back_start":
+        keyboard = [
+            [
+                InlineKeyboardButton("⚔️ Urush holati", callback_data="war"),
+                InlineKeyboardButton("📜 Urush tarixi", callback_data="warlog"),
+            ],
+            [
+                InlineKeyboardButton("👥 A'zolar", callback_data="azolar"),
+                InlineKeyboardButton("🏠 TH bo'yicha", callback_data="azolar"),
+            ],
+            [
+                InlineKeyboardButton("📖 Yordam", callback_data="help"),
+            ],
+        ]
+        await query.edit_message_text(
+            "⚔️ *CoC Klan Boti faol!*\n\n"
+            "Quyidagi tugmalardan foydalaning yoki buyruq yozing:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
 
 async def cmd_war(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     async with aiohttp.ClientSession() as s:
@@ -528,10 +700,12 @@ async def run():
     )
 
     app.add_handler(CommandHandler("start",    cmd_start))
+    app.add_handler(CommandHandler("help",     cmd_help))
     app.add_handler(CommandHandler("urush",    cmd_war))
     app.add_handler(CommandHandler("urushlog", cmd_warlog))
     app.add_handler(CommandHandler("oyinchi",  cmd_player))
     app.add_handler(CommandHandler("azolar",   cmd_members))
+    app.add_handler(CallbackQueryHandler(button_callback))
 
     async with app:
         await app.initialize()
