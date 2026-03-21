@@ -121,7 +121,7 @@ def parse_coc_time(ts: str) -> datetime:
 
 def time_left_str(sec: float) -> str:
     h, m = int(sec // 3600), int((sec % 3600) // 60)
-    return f"{h}soat {m}min" if h else f"{m}min"
+    return f"{h}s {m}d" if h else f"{m}d"
 
 def stars_bar(n: int) -> str:
     return "⭐" * n + "☆" * (3 - n)
@@ -395,9 +395,16 @@ async def button_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         async with aiohttp.ClientSession() as s:
             war = await get_current_war(s)
         if not war or war.get("state") in ("notInWar", None):
-            await query.edit_message_text("😴 Klan hozir urushda emas.")
+            keyboard = [[InlineKeyboardButton("🔙 Asosiy menyu", callback_data="back_start")]]
+            await query.edit_message_text(
+                "😴 Klan hozir urushda emas.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
         else:
-            keyboard = [[InlineKeyboardButton("🔄 Yangilash", callback_data="war")]]
+            keyboard = [
+                [InlineKeyboardButton("🔄 Yangilash", callback_data="war")],
+                [InlineKeyboardButton("🔙 Asosiy menyu", callback_data="back_start")],
+            ]
             await query.edit_message_text(
                 msg_war_status(war),
                 parse_mode="Markdown",
