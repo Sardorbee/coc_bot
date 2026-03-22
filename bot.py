@@ -23,6 +23,10 @@ from handlers import (
     cmd_start,
     cmd_war,
     cmd_warlog,
+    cmd_qurol,
+    cmd_yutuq,
+    cmd_builder,
+    cmd_solishtir,
 )
 from monitor import keep_alive, war_monitor
 
@@ -59,12 +63,16 @@ def _start_health_server():
 def _build_app() -> Application:
     app = Application.builder().token(config.BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start",    cmd_start))
-    app.add_handler(CommandHandler("help",     cmd_help))
-    app.add_handler(CommandHandler("urush",    cmd_war))
-    app.add_handler(CommandHandler("urushlog", cmd_warlog))
-    app.add_handler(CommandHandler("oyinchi",  cmd_player))
-    app.add_handler(CommandHandler("azolar",   cmd_members))
+    app.add_handler(CommandHandler("start",     cmd_start))
+    app.add_handler(CommandHandler("help",      cmd_help))
+    app.add_handler(CommandHandler("urush",     cmd_war))
+    app.add_handler(CommandHandler("urushlog",  cmd_warlog))
+    app.add_handler(CommandHandler("oyinchi",   cmd_player))
+    app.add_handler(CommandHandler("azolar",    cmd_members))
+    app.add_handler(CommandHandler("qurol",     cmd_qurol))
+    app.add_handler(CommandHandler("yutuq",     cmd_yutuq))
+    app.add_handler(CommandHandler("builder",   cmd_builder))
+    app.add_handler(CommandHandler("solishtir", cmd_solishtir))
     app.add_handler(CallbackQueryHandler(button_callback))
 
     return app

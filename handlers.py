@@ -38,19 +38,25 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "*Buyruqlar:*\n"
+        "*Buyruqlar:*\n\n"
+        "*🏰 Klan:*\n"
         "• /urush — joriy urush holati\n"
         "• /urushlog — oxirgi 5 ta urush\n"
-        "• /oyinchi #TAG — o'yinchi ma'lumotlari\n"
-        "• /azolar — barcha a'zolar (TH boyicha)\n"
+        "• /azolar — barcha a'zolar (TH bo'yicha)\n"
         "• /azolar 14 — faqat TH14 a'zolari\n\n"
+        "*👤 O'yinchi:*\n"
+        "• /oyinchi #TAG — to'liq o'yinchi profili\n"
+        "• /qurol #TAG — yangilanish kuzatuvchi (max %)\n"
+        "• /yutuq #TAG — yutuqlar va bajarilish %\n"
+        "• /builder #TAG — Builder Base statistikasi\n"
+        "• /solishtir #TAG1 #TAG2 — ikki o'yinchini solishtir\n\n"
         "*Avtomatik xabarlar:*\n"
-        "• A'zo qo'shilganda / Chiqqanda\n"
-        "• Tayyorgarlik boshlanganda\n"
-        "• Urush boshlanganida\n"
-        "• 2 soat va 30 daqiqalik ogohlantirishlar\n"
-        "• 3 yulduzli hujum bildirishnomasi\n"
-        "• Urush tugaganda natija",
+        "• ✅ A'zo qo'shilganda / 👋 Chiqqanda\n"
+        "• 📋 Tayyorgarlik boshlanganda\n"
+        "• ⚔️ Urush boshlanganida\n"
+        "• ⏰ 2 soat va 30 daqiqalik ogohlantirishlar\n"
+        "• 🌟 3 yulduzli hujum bildirishnomasi\n"
+        "• 🏁 Urush tugaganda natija",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard(),
     )
@@ -122,3 +128,79 @@ async def cmd_members(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 msg.members_list(chunk, title=title),
                 parse_mode="Markdown",
             )
+
+
+async def cmd_qurol(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Yangilanish kuzatuvchi — /qurol #TAG"""
+    if not ctx.args:
+        await update.message.reply_text("Ishlatish: /qurol #TAG\nMisol: /qurol #2ABC123")
+        return
+    await update.message.reply_text("⏳ Yuklanmoqda...")
+    async with aiohttp.ClientSession() as s:
+        player = await fetch_player(s, ctx.args[0])
+    if not player:
+        await update.message.reply_text("❌ O'yinchi topilmadi — tegni tekshiring.")
+        return
+    text = msg.upgrade_tracker(player)
+    # Can be long — send in chunks if needed
+    if len(text) > 4000:
+        mid = text[:4000].rfind("\n")
+        await update.message.reply_text(text[:mid], parse_mode="Markdown")
+        await update.message.reply_text(text[mid:], parse_mode="Markdown")
+    else:
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def cmd_yutuq(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Yutuqlar — /yutuq #TAG"""
+    if not ctx.args:
+        await update.message.reply_text("Ishlatish: /yutuq #TAG\nMisol: /yutuq #2ABC123")
+        return
+    await update.message.reply_text("⏳ Yuklanmoqda...")
+    async with aiohttp.ClientSession() as s:
+        player = await fetch_player(s, ctx.args[0])
+    if not player:
+        await update.message.reply_text("❌ O'yinchi topilmadi — tegni tekshiring.")
+        return
+    text = msg.achievements(player)
+    if len(text) > 4000:
+        mid = text[:4000].rfind("\n")
+        await update.message.reply_text(text[:mid], parse_mode="Markdown")
+        await update.message.reply_text(text[mid:], parse_mode="Markdown")
+    else:
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def cmd_builder(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Builder Base — /builder #TAG"""
+    if not ctx.args:
+        await update.message.reply_text("Ishlatish: /builder #TAG\nMisol: /builder #2ABC123")
+        return
+    await update.message.reply_text("⏳ Yuklanmoqda...")
+    async with aiohttp.ClientSession() as s:
+        player = await fetch_player(s, ctx.args[0])
+    if not player:
+        await update.message.reply_text("❌ O'yinchi topilmadi — tegni tekshiring.")
+        return
+    await update.message.reply_text(msg.builder_base(player), parse_mode="Markdown")
+
+
+async def cmd_solishtir(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """O'yinchi solishtirish — /solishtir #TAG1 #TAG2"""
+    if not ctx.args or len(ctx.args) < 2:
+        await update.message.reply_text(
+            "Ishlatish: /solishtir #TAG1 #TAG2\n"
+            "Misol: /solishtir #2ABC123 #9XYZ456"
+        )
+        return
+    await update.message.reply_text("⏳ Ikkala o'yinchi yuklanmoqda...")
+    async with aiohttp.ClientSession() as s:
+        p1 = await fetch_player(s, ctx.args[0])
+        p2 = await fetch_player(s, ctx.args[1])
+    if not p1:
+        await update.message.reply_text(f"❌ Birinchi o'yinchi topilmadi: {ctx.args[0]}")
+        return
+    if not p2:
+        await update.message.reply_text(f"❌ Ikkinchi o'yinchi topilmadi: {ctx.args[1]}")
+        return
+    await update.message.reply_text(msg.compare_players(p1, p2), parse_mode="Markdown")
