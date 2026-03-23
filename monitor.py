@@ -23,7 +23,8 @@ async def _check_members(bot: Bot, session: aiohttp.ClientSession):
     if not members:
         return
 
-    current = {m["tag"]: m["name"] for m in members}
+    current      = {m["tag"]: m["name"] for m in members}
+    member_count = len(current)
 
     if not state.members_initialized:
         state.init_members(current)
@@ -33,21 +34,38 @@ async def _check_members(bot: Bot, session: aiohttp.ClientSession):
 
     for tag in joined:
         name = current[tag]
-        await bot.send_message(
-            TELEGRAM_CHAT,
-            f"✅ *{name}* klanga qo'shildi!\n🏠 Xush kelibsiz!",
-            parse_mode="Markdown",
+
+        # Fetch full player profile for the new member
+        from api import fetch_player
+        player = await fetch_player(session, tag)
+        profile_text = msg.player_card(player) if player else ""
+
+        join_text = (
+            f"✅ *{name}* klanga qo'shildi!\n"
+            f"🏠 Xush kelibsiz!\n\n"
+            f"👥 Klan a'zolari endi *{member_count}* ta bo'ldi!"
         )
-        log.info("Qo'shildi: %s", name)
+        await bot.send_message(TELEGRAM_CHAT, join_text, parse_mode="Markdown")
+
+        if profile_text:
+            await bot.send_message(
+                TELEGRAM_CHAT,
+                f"👤 *Yangi a'zo haqida:*\n\n{profile_text}",
+                parse_mode="Markdown",
+            )
+
+        log.info("Qo'shildi: %s (%s), jami: %d", name, tag, member_count)
 
     for tag in left:
-        name = state.members[tag]
+        name         = state.members[tag]
+        member_count_after = member_count  # already updated after leave
         await bot.send_message(
             TELEGRAM_CHAT,
-            f"👋 *{name}* klandan chiqib ketdi.",
+            f"👋 *{name}* klandan chiqib ketdi.\n\n"
+            f"👥 Klan a'zolari endi *{member_count_after}* ta bo'ldi.",
             parse_mode="Markdown",
         )
-        log.info("Chiqdi: %s", name)
+        log.info("Chiqdi: %s (%s), jami: %d", name, tag, member_count_after)
 
     state.update_members(current)
 
