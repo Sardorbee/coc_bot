@@ -126,6 +126,26 @@ async def _check_war(bot: Bot, session: aiohttp.ClientSession):
             if state.is_new_war(war_id):
                 state.reset_war(war_id)
                 state.war["preparation_announced"] = True  # don't re-announce prep
+                # If bot restarted mid-war, mark already-passed windows as done
+                remaining_on_start = (
+                    msg.parse_coc_time(war["endTime"]) - datetime.now(timezone.utc)
+                ).total_seconds()
+                if remaining_on_start <= 0:
+                    # War is basically over, skip all reminders
+                    state.war["war_started_announced"] = True
+                    state.war["reminded_2h"]           = True
+                    state.war["reminded_30m"]          = True
+                elif remaining_on_start <= 1800:
+                    # Less than 30 min left — skip 2h and war-start announcements
+                    state.war["war_started_announced"] = True
+                    state.war["reminded_2h"]           = True
+                elif remaining_on_start <= 7200:
+                    # Less than 2h left — skip 2h reminder (already past)
+                    state.war["reminded_2h"] = True
+                log.info(
+                    "Urush topildi (qayta ishga tushish), qolgan vaqt: %.0fs",
+                    remaining_on_start,
+                )
 
             clan         = war["clan"]
             opp          = war["opponent"]
@@ -182,8 +202,11 @@ async def _check_war(bot: Bot, session: aiohttp.ClientSession):
         elif war_state == "warEnded":
             if state.is_new_war(war_id):
                 state.reset_war(war_id)
+                # On restart after war ended — skip all mid-war announcements
                 state.war["preparation_announced"] = True
                 state.war["war_started_announced"] = True
+                state.war["reminded_2h"]           = True
+                state.war["reminded_30m"]          = True
             if not state.war["posted_result"]:
                 await bot.send_message(
                     TELEGRAM_CHAT, msg.war_result(war), parse_mode="Markdown"
@@ -198,7 +221,7 @@ async def _check_war(bot: Bot, session: aiohttp.ClientSession):
 # ── Main monitor loop ─────────────────────────────────────────────────────────
 
 async def war_monitor(bot: Bot):
-    log.info("Urush monitori boshlandi (har %ds).", POLL_INTERVAL)
+    log.info("Urush monitoru boshlandi (har %ds).", POLL_INTERVAL)
     while True:
         try:
             async with aiohttp.ClientSession() as session:
