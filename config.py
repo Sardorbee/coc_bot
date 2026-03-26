@@ -17,7 +17,7 @@ COC_HEADERS = {"Authorization": f"Bearer {COC_API_KEY}", "Accept": "application/
 
 # ── Server ────────────────────────────────────────────────────────────────────
 PORT          = int(os.getenv("PORT", "10000"))
-RENDER_URL    = os.getenv("RENDER_URL", "")   # e.g. https://coc-clan-bot.onrender.com
+RENDER_URL    = "https://coc-bot-1-wqqq.onrender.com"   # e.g. https://coc-clan-bot.onrender.com
 POLL_INTERVAL = 60                            # war monitor poll cadence (seconds)
 
 # ── Logging ───────────────────────────────────────────────────────────────────
