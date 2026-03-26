@@ -241,7 +241,7 @@ async def keep_alive():
         log.warning("RENDER_URL sozlanmagan — keep-alive ishlamaydi! Render env vars'ga qo'shing.")
         return
     await asyncio.sleep(30)  # server to'liq ishga tushishini kutish
-    log.info("Keep-alive boshlandi → har 10 daqiqada %s ping qilinadi.", RENDER_URL)
+    log.info("Keep-alive boshlandi → har 1 daqiqada %s ping qilinadi.", RENDER_URL)
     while True:
         try:
             async with aiohttp.ClientSession() as s:
@@ -253,4 +253,4 @@ async def keep_alive():
                     log.info("Keep-alive ping → HTTP %s", r.status)
         except Exception as exc:
             log.warning("Keep-alive ping xatosi: %s", exc)
-        await asyncio.sleep(600)  # 10 daqiqa
+        await asyncio.sleep(60)  # 1 daqiqa
