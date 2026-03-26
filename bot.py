@@ -34,22 +34,23 @@ log = logging.getLogger(__name__)
 
 
 # ── Health server (Render requires an open port) ──────────────────────────────
+            # ip = urllib.request.urlopen("https://api.ipify.org", timeout=5).read().decode()
 
 class _HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        import urllib.request
-        try:
-            ip = urllib.request.urlopen("https://api.ipify.org", timeout=5).read().decode()
-        except Exception:
-            ip = "unavailable"
-        body = f"CoC Bot ishlayapti | Chiqish IP: {ip}".encode()
-        self.send_response(200)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        if self.path == "/health":
+            body = b"OK"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     def log_message(self, *_):
-        pass  # silence HTTP access logs
+        pass
 
 
 def _start_health_server():
