@@ -4,14 +4,13 @@ monitor.py — Urush monitoru va keep-alive loop
 
 import asyncio
 import logging
-from datetime import datetime, timezone
 
 import aiohttp
 from telegram import Bot
 
 import messages as msg
 import state
-from api import fetch_clan_members, fetch_current_war, fetch_player
+from api import fetch_clan_members, fetch_current_war
 from config import POLL_INTERVAL, RENDER_URL, TELEGRAM_CHAT
 
 log = logging.getLogger(__name__)
@@ -20,59 +19,37 @@ log = logging.getLogger(__name__)
 # ── Member join/leave tracker ─────────────────────────────────────────────────
 
 async def _check_members(bot: Bot, session: aiohttp.ClientSession):
-    try:
-        members = await fetch_clan_members(session)
-        if not members:
-            return
+    members = await fetch_clan_members(session)
+    if not members:
+        return
 
-        current      = {m["tag"]: m["name"] for m in members}
-        member_count = len(current)
+    current = {m["tag"]: m["name"] for m in members}
 
-        if not state.members_initialized:
-            state.init_members(current)
-            return
+    if not state.members_initialized:
+        state.init_members(current)
+        return
 
-        joined, left = state.diff_members(current)
+    joined, left = state.diff_members(current)
 
-        for tag in joined:
-            name = current[tag]
-            try:
-                # Fetch full profile of new member
-                player       = await fetch_player(session, tag)
-                profile_text = msg.player_card(player) if player else None
-            except Exception as e:
-                log.warning("Yangi a'zo profili olinmadi %s: %s", tag, e)
-                profile_text = None
+    for tag in joined:
+        name = current[tag]
+        await bot.send_message(
+            TELEGRAM_CHAT,
+            f"✅ *{name}* klanga qo'shildi!\n🏠 Xush kelibsiz!",
+            parse_mode="Markdown",
+        )
+        log.info("Qo'shildi: %s", name)
 
-            await bot.send_message(
-                TELEGRAM_CHAT,
-                f"✅ *{name}* klanga qo'shildi!\n"
-                f"🏠 Xush kelibsiz!\n\n"
-                f"👥 Klan a'zolari endi *{member_count}* ta bo'ldi!",
-                parse_mode="Markdown",
-            )
-            if profile_text:
-                await bot.send_message(
-                    TELEGRAM_CHAT,
-                    f"👤 *Yangi a'zo haqida:*\n\n{profile_text}",
-                    parse_mode="Markdown",
-                )
-            log.info("Qo'shildi: %s (%s), jami: %d", name, tag, member_count)
+    for tag in left:
+        name = state.members[tag]
+        await bot.send_message(
+            TELEGRAM_CHAT,
+            f"👋 *{name}* klandan chiqib ketdi.",
+            parse_mode="Markdown",
+        )
+        log.info("Chiqdi: %s", name)
 
-        for tag in left:
-            name = state.members[tag]
-            await bot.send_message(
-                TELEGRAM_CHAT,
-                f"👋 *{name}* klandan chiqib ketdi.\n\n"
-                f"👥 Klan a'zolari endi *{member_count}* ta bo'ldi.",
-                parse_mode="Markdown",
-            )
-            log.info("Chiqdi: %s (%s), jami: %d", name, tag, member_count)
-
-        state.update_members(current)
-
-    except Exception as exc:
-        log.error("_check_members xatosi: %s", exc)
+    state.update_members(current)
 
 
 # ── War event tracker ─────────────────────────────────────────────────────────
@@ -102,120 +79,75 @@ def _find_defender_name(war: dict, tag: str) -> str:
 
 
 async def _check_war(bot: Bot, session: aiohttp.ClientSession):
-    try:
-        war = await fetch_current_war(session)
-        if not war:
-            return
+    war = await fetch_current_war(session)
+    if not war:
+        return
 
-        war_state = war.get("state")
-        war_id    = war.get("preparationStartTime", war.get("endTime", ""))
+    war_state = war.get("state")
+    war_id    = war.get("preparationStartTime", war.get("endTime", ""))
 
-        # ── Preparation ───────────────────────────────────────────────────────
-        if war_state == "preparation":
-            if state.is_new_war(war_id):
-                state.reset_war(war_id)
-            if not state.war["preparation_announced"]:
-                await bot.send_message(
-                    TELEGRAM_CHAT, msg.war_preparation(war), parse_mode="Markdown"
-                )
-                state.war["preparation_announced"] = True
-                log.info("Tayyorgarlik e'lon qilindi.")
+    # ── Preparation ───────────────────────────────────────────────────────────
+    if war_state == "preparation":
+        if state.is_new_war(war_id):
+            state.reset_war(war_id)
+        if not state.war["preparation_announced"]:
+            await bot.send_message(TELEGRAM_CHAT, msg.war_preparation(war), parse_mode="Markdown")
+            state.war["preparation_announced"] = True
+            log.info("Tayyorgarlik e'lon qilindi.")
 
-        # ── In War ────────────────────────────────────────────────────────────
-        elif war_state == "inWar":
-            if state.is_new_war(war_id):
-                state.reset_war(war_id)
-                state.war["preparation_announced"] = True  # don't re-announce prep
-                # If bot restarted mid-war, mark already-passed windows as done
-                remaining_on_start = (
-                    msg.parse_coc_time(war["endTime"]) - datetime.now(timezone.utc)
-                ).total_seconds()
-                if remaining_on_start <= 0:
-                    # War is basically over, skip all reminders
-                    state.war["war_started_announced"] = True
-                    state.war["reminded_2h"]           = True
-                    state.war["reminded_30m"]          = True
-                elif remaining_on_start <= 1800:
-                    # Less than 30 min left — skip 2h and war-start announcements
-                    state.war["war_started_announced"] = True
-                    state.war["reminded_2h"]           = True
-                elif remaining_on_start <= 7200:
-                    # Less than 2h left — skip 2h reminder (already past)
-                    state.war["reminded_2h"] = True
-                log.info(
-                    "Urush topildi (qayta ishga tushish), qolgan vaqt: %.0fs",
-                    remaining_on_start,
-                )
+    # ── In War ────────────────────────────────────────────────────────────────
+    elif war_state == "inWar":
+        if state.is_new_war(war_id):
+            state.reset_war(war_id)
+            state.war["preparation_announced"] = True   # skip re-announcing prep
 
-            clan         = war["clan"]
-            opp          = war["opponent"]
-            remaining    = (
-                msg.parse_coc_time(war["endTime"]) - datetime.now(timezone.utc)
-            ).total_seconds()
-            attacks_left = (
-                war["teamSize"] * war.get("attacksPerMember", 2) - clan.get("attacks", 0)
+        clan          = war["clan"]
+        opp           = war["opponent"]
+        end_time      = war["endTime"]
+        from messages import parse_coc_time
+        from datetime import datetime, timezone
+        remaining     = (parse_coc_time(end_time) - datetime.now(timezone.utc)).total_seconds()
+        attacks_left  = war["teamSize"] * war.get("attacksPerMember", 2) - clan.get("attacks", 0)
+
+        # War started announcement
+        if not state.war["war_started_announced"]:
+            await bot.send_message(TELEGRAM_CHAT, msg.war_started(war), parse_mode="Markdown")
+            state.war["war_started_announced"] = True
+            log.info("Urush boshlanishi e'lon qilindi.")
+
+        # 3-star alerts
+        for hit in _find_new_3stars(war):
+            defender = _find_defender_name(war, hit["defender_tag"])
+            await bot.send_message(
+                TELEGRAM_CHAT,
+                msg.three_star(hit["attacker_name"], defender, hit["destruction"], hit["duration"]),
+                parse_mode="Markdown",
             )
+            state.war["three_star_seen"].add(hit["key"])
+            log.info("3 yulduz: %s -> %s", hit["attacker_name"], defender)
 
-            # War started
-            if not state.war["war_started_announced"]:
-                await bot.send_message(
-                    TELEGRAM_CHAT, msg.war_started(war), parse_mode="Markdown"
-                )
-                state.war["war_started_announced"] = True
-                log.info("Urush boshlanishi e'lon qilindi.")
+        # 2-hour reminder
+        if 0 < remaining <= 7200 and not state.war["reminded_2h"]:
+            await bot.send_message(TELEGRAM_CHAT, msg.war_reminder_2h(war, attacks_left), parse_mode="Markdown")
+            state.war["reminded_2h"] = True
+            log.info("2 soatlik ogohlantirish yuborildi.")
 
-            # 3-star alerts
-            for hit in _find_new_3stars(war):
-                defender = _find_defender_name(war, hit["defender_tag"])
-                await bot.send_message(
-                    TELEGRAM_CHAT,
-                    msg.three_star(
-                        hit["attacker_name"], defender,
-                        hit["destruction"], hit["duration"]
-                    ),
-                    parse_mode="Markdown",
-                )
-                state.war["three_star_seen"].add(hit["key"])
-                log.info("3 yulduz: %s -> %s", hit["attacker_name"], defender)
+        # 30-minute reminder
+        if 0 < remaining <= 1800 and not state.war["reminded_30m"]:
+            await bot.send_message(TELEGRAM_CHAT, msg.war_reminder_30m(war, attacks_left), parse_mode="Markdown")
+            state.war["reminded_30m"] = True
+            log.info("30 daqiqalik ogohlantirish yuborildi.")
 
-            # 2-hour reminder
-            if 0 < remaining <= 7200 and not state.war["reminded_2h"]:
-                await bot.send_message(
-                    TELEGRAM_CHAT,
-                    msg.war_reminder_2h(war, attacks_left),
-                    parse_mode="Markdown",
-                )
-                state.war["reminded_2h"] = True
-                log.info("2 soatlik ogohlantirish yuborildi.")
-
-            # 30-minute reminder
-            if 0 < remaining <= 1800 and not state.war["reminded_30m"]:
-                await bot.send_message(
-                    TELEGRAM_CHAT,
-                    msg.war_reminder_30m(war, attacks_left),
-                    parse_mode="Markdown",
-                )
-                state.war["reminded_30m"] = True
-                log.info("30 daqiqalik ogohlantirish yuborildi.")
-
-        # ── War Ended ─────────────────────────────────────────────────────────
-        elif war_state == "warEnded":
-            if state.is_new_war(war_id):
-                state.reset_war(war_id)
-                # On restart after war ended — skip all mid-war announcements
-                state.war["preparation_announced"] = True
-                state.war["war_started_announced"] = True
-                state.war["reminded_2h"]           = True
-                state.war["reminded_30m"]          = True
-            if not state.war["posted_result"]:
-                await bot.send_message(
-                    TELEGRAM_CHAT, msg.war_result(war), parse_mode="Markdown"
-                )
-                state.war["posted_result"] = True
-                log.info("Urush natijasi e'lon qilindi.")
-
-    except Exception as exc:
-        log.error("_check_war xatosi: %s", exc)
+    # ── War Ended ─────────────────────────────────────────────────────────────
+    elif war_state == "warEnded":
+        if state.is_new_war(war_id):
+            state.reset_war(war_id)
+            state.war["preparation_announced"] = True
+            state.war["war_started_announced"] = True
+        if not state.war["posted_result"]:
+            await bot.send_message(TELEGRAM_CHAT, msg.war_result(war), parse_mode="Markdown")
+            state.war["posted_result"] = True
+            log.info("Urush natijasi e'lon qilindi.")
 
 
 # ── Main monitor loop ─────────────────────────────────────────────────────────
@@ -225,11 +157,10 @@ async def war_monitor(bot: Bot):
     while True:
         try:
             async with aiohttp.ClientSession() as session:
-                # Run both checks independently so one failure never blocks the other
                 await _check_members(bot, session)
                 await _check_war(bot, session)
         except Exception as exc:
-            log.error("war_monitor umumiy xatosi: %s", exc)
+            log.error("Monitor xatosi: %s", exc)
         await asyncio.sleep(POLL_INTERVAL)
 
 
@@ -238,19 +169,15 @@ async def war_monitor(bot: Bot):
 async def keep_alive():
     """Render free tier'ni uyquga ketmaslik uchun har 10 daqiqada o'zini ping qiladi."""
     if not RENDER_URL:
-        log.warning("RENDER_URL sozlanmagan — keep-alive ishlamaydi! Render env vars'ga qo'shing.")
+        log.info("RENDER_URL yo'q — keep-alive o'chirildi.")
         return
     await asyncio.sleep(30)  # server to'liq ishga tushishini kutish
-    log.info("Keep-alive boshlandi → har 1 daqiqada %s ping qilinadi.", RENDER_URL)
+    log.info("Keep-alive boshlandi → %s", RENDER_URL)
     while True:
         try:
             async with aiohttp.ClientSession() as s:
-                async with s.get(
-                    RENDER_URL,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                    headers={"User-Agent": "CoC-Bot-KeepAlive/1.0"},
-                ) as r:
+                async with s.get(RENDER_URL, timeout=aiohttp.ClientTimeout(total=10)) as r:
                     log.info("Keep-alive ping → HTTP %s", r.status)
         except Exception as exc:
-            log.warning("Keep-alive ping xatosi: %s", exc)
-        await asyncio.sleep(60)  # 1 daqiqa
+            log.warning("Keep-alive xatosi: %s", exc)
+        await asyncio.sleep(600)  # 10 daqiqa
