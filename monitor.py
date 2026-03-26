@@ -238,15 +238,19 @@ async def war_monitor(bot: Bot):
 async def keep_alive():
     """Render free tier'ni uyquga ketmaslik uchun har 10 daqiqada o'zini ping qiladi."""
     if not RENDER_URL:
-        log.info("RENDER_URL yo'q — keep-alive o'chirildi.")
+        log.warning("RENDER_URL sozlanmagan — keep-alive ishlamaydi! Render env vars'ga qo'shing.")
         return
     await asyncio.sleep(30)  # server to'liq ishga tushishini kutish
-    log.info("Keep-alive boshlandi → %s", RENDER_URL)
+    log.info("Keep-alive boshlandi → har 10 daqiqada %s ping qilinadi.", RENDER_URL)
     while True:
         try:
             async with aiohttp.ClientSession() as s:
-                async with s.get(RENDER_URL, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                async with s.get(
+                    RENDER_URL,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                    headers={"User-Agent": "CoC-Bot-KeepAlive/1.0"},
+                ) as r:
                     log.info("Keep-alive ping → HTTP %s", r.status)
         except Exception as exc:
-            log.warning("Keep-alive xatosi: %s", exc)
+            log.warning("Keep-alive ping xatosi: %s", exc)
         await asyncio.sleep(600)  # 10 daqiqa
